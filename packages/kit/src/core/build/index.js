@@ -17,12 +17,6 @@ import { copy_assets, posixify, resolve_entry } from '../utils.js';
 /** @param {any} value */
 const s = (value) => JSON.stringify(value);
 
-/** @typedef {Record<string, {
- *   file: string;
- *   css: string[];
- *   imports: string[];
- * }>} ClientManifest */
-
 /**
  * @param {import('types/config').ValidatedConfig} config
  * @param {{
@@ -188,7 +182,7 @@ async function build_client({
 
 	await vite.build(merged_config);
 
-	/** @type {ClientManifest} */
+	/** @type {import('vite').Manifest} */
 	const client_manifest = JSON.parse(fs.readFileSync(client_manifest_file, 'utf-8'));
 	fs.renameSync(client_manifest_file, `${output_dir}/manifest.json`); // inspectable but not shipped
 
@@ -206,7 +200,7 @@ async function build_client({
  *   client_entry_file: string;
  *   service_worker_entry_file: string | null;
  * }} options
- * @param {ClientManifest} client_manifest
+ * @param {import('vite').Manifest} client_manifest
  * @param {string} runtime
  */
 async function build_server(
@@ -307,6 +301,11 @@ async function build_server(
 				.replace('%svelte.head%', '" + head + "')
 				.replace('%svelte.body%', '" + body + "')};
 
+			const loader = {
+				fixStackTrace: ({ error }) => {},
+				loadComponent
+			};
+
 			let options = null;
 
 			const default_settings = { paths: ${s(config.kit.paths)} };
@@ -330,15 +329,13 @@ async function build_server(
 					fetched: undefined,
 					floc: ${config.kit.floc},
 					get_component_path: id => assets + ${s(prefix)} + entry_lookup[id],
-					get_stack: error => String(error), // for security
 					handle_error: (error, request) => {
+						loader.fixStackTrace({ error });
 						hooks.handleError({ error, request });
-						error.stack = options.get_stack(error);
 					},
 					hooks,
 					hydrate: ${s(config.kit.hydrate)},
 					initiator: undefined,
-					load_component,
 					manifest,
 					paths: settings.paths,
 					prerender: ${config.kit.prerender.enabled},
@@ -418,10 +415,10 @@ async function build_server(
 
 			const metadata_lookup = ${s(metadata_lookup)};
 
-			async function load_component(file) {
-				const { entry, css, js, styles } = metadata_lookup[file];
+			async function loadComponent({ id }) {
+				const { entry, css, js, styles } = metadata_lookup[id];
 				return {
-					module: await module_lookup[file](),
+					module: await module_lookup[id](),
 					entry: assets + ${s(prefix)} + entry,
 					css: css.map(dep => assets + ${s(prefix)} + dep),
 					js: js.map(dep => assets + ${s(prefix)} + dep),
@@ -433,7 +430,7 @@ async function build_server(
 				prerender
 			} = {}) {
 				const host = ${config.kit.host ? s(config.kit.host) : `request.headers[${s(config.kit.hostHeader || 'host')}]`};
-				return respond({ ...request, host }, options, { prerender });
+				return respond({ ...request, host }, loader, options, { prerender });
 			}
 		`
 			.replace(/^\t{3}/gm, '')
@@ -512,7 +509,7 @@ async function build_server(
  *   client_entry_file: string;
  *   service_worker_entry_file: string | null;
  * }} options
- * @param {ClientManifest} client_manifest
+ * @param {import('vite').Manifest} client_manifest
  */
 async function build_service_worker(
 	{ cwd, assets_base, config, manifest, build_dir, output_dir, service_worker_entry_file },
